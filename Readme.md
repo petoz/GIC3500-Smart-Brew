@@ -1,47 +1,72 @@
-# Induction Cooker PID Controller (GIC3500)
+# GIC3500 Smart Mashing Controller
 
-Professional automated mashing controller using an ESP32-C6 for the GIC3500 induction cooker.
-It automates the mashing phases according to a user-provided temperature and time schedule, regulating power using a CD74HC4067 multiplexer to switch cooker stages 0-11.
+[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.3-blue.svg)](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c6/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Features
-- **Wi-Fi & MQTT**: Reads the current temperature from a remote sensor over MQTT (`brew/sensor/temp`). Publishes status at `brew/cooker/status`.
-- **PID Control Loop**: Uses a standard PID control algorithm, mapping continuous 0-100% output precisely to 11 discrete induction cooker power levels. Avoids overshoot by limiting higher stages during temperature holds.
-- **Web UI & REST API**: Hosts a built-in HTTP server to easily submit multi-step mashing schedules (e.g., 65°C for 60 min, 75°C for 10 min) from any browser (PC or phone). No app required.
-- **State Machine**: Automatically transitions through Heat up, Hold phase, and Completion, entirely hands-free.
+Professional automated PID controller for the GIC3500 (3.5kW) induction cooker, designed specifically for beer mashing. Built on the ESP32-C6 using the native ESP-IDF framework for enterprise-grade multitasking and Wi-Fi/MQTT stability.
 
-## Build and Flashing
-This project leverages the native **ESP-IDF** framework (instead of Arduino) for robust multitasking and networking stability.
+<p align="center">
+  <img src="docs/images/web_ui_preview.png" alt="Web UI Preview" width="600"/>
+</p>
 
-1. Ensure you have PlatformIO installed with support for ESP-IDF.
-2. The `platformio.ini` uses the `espressif32` platform configured for ESP-IDF.
-3. Build the project:
-   ```bash
-   pio run
-   ```
-4. Flash to the ESP32-C6 device:
-   ```bash
-   pio run -t upload
-   ```
+## Overview
+This firmware replaces the physical rotary switch of the GIC3500 induction cooker with an **ESP32-C6** and a **CD74HC4067** multiplexer. It fully automates the mashing phases by dynamically adjusting the 11 induction power stages via a custom-tuned PID control loop.
 
-*Note: If you run into `fatfs` Python package collision issues on macOS, it means your global Python environment has an incompatible `fatfs` PyPI package that conflicts with PlatformIO's build script. You may need to run `pip uninstall fatfs` to let PlatformIO use its own tool.*
+Instead of just turning the cooker on/off at maximum power, the PID controller intelligently steps up and down the intermediate power levels, eliminating temperature overshoot and ensuring highly stable holding temperatures.
 
-## Web Interface
-After flashing, connect the ESP32-C6 to your network (defaults to SSID `optical` and Pass `Passw0rd`).
-Find its IP address from your router or via the Serial Monitor.
-Navigate to the IP in any browser:
-```
-http://<ESP32_IP_ADDRESS>
-```
-You will be presented with the Brew Mashing Controller dashboard where you can define the heating schedule and start the induction cooker automatically.
+## Key Features
+* 📱 **Standalone Web Interface**: No apps required. Configure your mashing schedule (up to 5 steps) and control everything via an intuitive, mobile-friendly web UI. 
+* 🛠 **Smart PID Power Modulation**: Maps continuous PID 0-100% output seamlessly across the 11 discrete induction power stages.
+* ☁️ **MQTT Integration & Logging**: 
+  * Reads fluid temperature from a remote sensor over MQTT (`brew/sensor/temp`).
+  * Reports cooker stage, target temp, and phase time remaining to `brew/cooker/status`.
+  * Remote debugging available by toggling system logs directly to `brew/cooker/log`.
+* 🔄 **Over-The-Air (OTA) Updates**: Flash new firmware via the web UI without ever touching a USB cable.
+* 💾 **Persistent NVS Memory**: Automatically saves your mashing schedule, Wi-Fi configuration, and settings across system reboots.
+* ✋ **Manual Override Mode**: Easily bypass the automation to manually set target power stages, ideal for hop boiling or manual mashing.
 
-## Hardware Multiplexer
-- `PIN_S0 = 23`
-- `PIN_S1 = 1`
-- `PIN_S2 = 2`
-- `PIN_S3 = 21`
-- `PIN_EN = 22`
+## Hardware Architecture
+* **Microcontroller**: Seeed XIAO ESP32-C6 (or any ESP32-C6 variant).
+* **Multiplexer**: CD74HC4067
+* **Cooker**: GIC3500 (3.5kW) Induction Cooker (mechanically modified)
+
+### Multiplexer Pinout
+| CD74HC4067 Pin | ESP32-C6 GPIO |
+|----------------|---------------|
+| S0             | GPIO 23       |
+| S1             | GPIO 1        |
+| S2             | GPIO 2        |
+| S3             | GPIO 21       |
+| EN             | GPIO 22       |
 
 See the source code in `components/power_control/power_control.c` for pulse and hold timing configurations.
 
-## Changelog
-- **v1.0.0**: Initial ESP-IDF version with MQTT, PID, WebServer, and power control multiplexing capabilities.
+## Getting Started
+
+### 1. Build and Flash
+This project is built using PlatformIO and the native ESP-IDF framework.
+1. Clone the repository.
+2. Open in VSCode with the PlatformIO extension installed.
+3. Build and upload via USB for the first time:
+```bash
+pio run -t upload
+```
+
+### 2. Initial Configuration (Wi-Fi Provisioning)
+1. On first boot, the ESP32-C6 will spin up an access point named **`GIC3500-Config`**.
+2. Connect to this Wi-Fi network using your phone or laptop.
+3. Open a browser and navigate to `http://192.168.4.1`.
+4. Scroll down to **System Config**, click `Update WiFi & MQTT` and enter your local network credentials and MQTT broker IP.
+5. The device will automatically save this to NVS memory and reboot onto your home network.
+
+### 3. Usage
+Once connected to your home network:
+1. Access the device's IP address in your browser.
+2. Define your mashing routine (e.g., Step 1: 52°C for 20m, Step 2: 65°C for 60m).
+3. The schedule is automatically saved. Click **Start** to begin mashing!
+
+## Future Roadmap & Tasks
+See [docs/TASKS.md](docs/TASKS.md) for the active development checklist.
+
+## License
+Provided under the [MIT License](LICENSE).
