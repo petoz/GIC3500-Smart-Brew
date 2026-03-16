@@ -39,6 +39,10 @@ static const char* index_html =
 "<button type=\"button\" onclick='save()'>Save Schedule</button>"
 "</form>"
 "</div>"
+"<div class='card'>"
+"<h3>System Config</h3>"
+"<button type=\"button\" onclick='setupWifi()'>Update WiFi & MQTT</button>"
+"</div>"
 "<script>"
 "function start() { fetch('/api/start', {method: 'POST'}); }"
 "function stop() { fetch('/api/stop', {method: 'POST'}); }"
@@ -51,11 +55,21 @@ static const char* index_html =
 "  }"
 "  fetch('/api/schedule', {method: 'POST', body: JSON.stringify(s)});"
 "}"
+"function setupWifi() {"
+"  let w = {"
+"    ssid: prompt('New WiFi SSID:'),"
+"    pass: prompt('New WiFi Password:'),"
+"    mqtt: prompt('MQTT Broker IP:'),"
+"    muser: prompt('MQTT Username (optional):'),"
+"    mpass: prompt('MQTT Password (optional):')"
+"  };"
+"  if (w.ssid && w.mqtt) fetch('/api/config', {method: 'POST', body: JSON.stringify(w)}).then(()=>alert('Rebooting...'));"
+"}"
 "setInterval(() => {"
 "  fetch('/api/status').then(r=>r.json()).then(d=>{"
 "    document.getElementById('status_running').innerText = d.running ? 'Yes':'No';"
 "    document.getElementById('status_temp').innerText = d.running ? d.target_temp : '--';"
-"  });"
+"  }).catch(e=>console.log(e));"
 "}, 2000);"
 "</script>"
 "</body></html>";
@@ -144,11 +158,57 @@ static esp_err_t get_status_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "esp_system.h"
+
+static esp_err_t post_config_handler(httpd_req_t *req) {
+    int total_len = req->content_len;
+    if (total_len >= 1000) return ESP_FAIL;
+    
+    char *buf = malloc(total_len + 1);
+    if(httpd_req_recv(req, buf, total_len) <= 0) {
+        free(buf); return ESP_FAIL;
+    }
+    buf[total_len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (root) {
+        nvs_handle_t my_handle;
+        if (nvs_open("gic3500_cfg", NVS_READWRITE, &my_handle) == ESP_OK) {
+            cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
+            cJSON *pass = cJSON_GetObjectItem(root, "pass");
+            cJSON *mqtt = cJSON_GetObjectItem(root, "mqtt");
+            cJSON *muser = cJSON_GetObjectItem(root, "muser");
+            cJSON *mpass = cJSON_GetObjectItem(root, "mpass");
+            
+            if (ssid && ssid->valuestring) nvs_set_str(my_handle, "wifi_ssid", ssid->valuestring);
+            if (pass && pass->valuestring) nvs_set_str(my_handle, "wifi_pass", pass->valuestring);
+            if (mqtt && mqtt->valuestring) nvs_set_str(my_handle, "mqtt_ip", mqtt->valuestring);
+            if (muser && muser->valuestring) nvs_set_str(my_handle, "mqtt_user", muser->valuestring);
+            if (mpass && mpass->valuestring) nvs_set_str(my_handle, "mqtt_pass", mpass->valuestring);
+            
+            nvs_commit(my_handle);
+            nvs_close(my_handle);
+            ESP_LOGI(TAG, "Saved new WiFi/MQTT config to NVS. Rebooting...");
+            
+            httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            esp_restart();
+        }
+        cJSON_Delete(root);
+    }
+    
+    free(buf);
+    return ESP_OK;
+}
+
 static httpd_uri_t uri_index = { .uri = "/", .method = HTTP_GET, .handler = get_index_handler, .user_ctx = NULL };
 static httpd_uri_t uri_start = { .uri = "/api/start", .method = HTTP_POST, .handler = post_start_handler, .user_ctx = NULL };
 static httpd_uri_t uri_stop = { .uri = "/api/stop", .method = HTTP_POST, .handler = post_stop_handler, .user_ctx = NULL };
 static httpd_uri_t uri_schedule = { .uri = "/api/schedule", .method = HTTP_POST, .handler = post_schedule_handler, .user_ctx = NULL };
 static httpd_uri_t uri_status = { .uri = "/api/status", .method = HTTP_GET, .handler = get_status_handler, .user_ctx = NULL };
+static httpd_uri_t uri_config = { .uri = "/api/config", .method = HTTP_POST, .handler = post_config_handler, .user_ctx = NULL };
 
 void web_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -163,6 +223,7 @@ void web_server_start(void) {
         httpd_register_uri_handler(server, &uri_stop);
         httpd_register_uri_handler(server, &uri_schedule);
         httpd_register_uri_handler(server, &uri_status);
+        httpd_register_uri_handler(server, &uri_config);
     }
 }
 
