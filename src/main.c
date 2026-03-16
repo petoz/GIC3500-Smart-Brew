@@ -18,7 +18,8 @@ typedef enum {
     STATE_IDLE,
     STATE_HEATING,
     STATE_HOLDING,
-    STATE_DONE
+    STATE_DONE,
+    STATE_MANUAL
 } mash_state_t;
 
 static mash_state_t current_state = STATE_IDLE;
@@ -39,7 +40,27 @@ void mashing_task(void *pvParameters) {
         mash_schedule_t* schedule = get_current_schedule();
         int running = get_current_status();
         float current_temp = get_latest_temperature();
-        
+        int manual_stage = get_manual_stage();
+
+        if (manual_stage >= 0 && manual_stage <= 11) {
+            if (current_state != STATE_MANUAL) {
+                ESP_LOGI(TAG, "Entering Manual Mode! Stage: %d", manual_stage);
+                current_state = STATE_MANUAL;
+                set_current_status(0); // Stop auto schedule when manual starts
+            }
+            if (last_stage != manual_stage) {
+                power_control_set_stage(manual_stage);
+                last_stage = manual_stage;
+            }
+            mqtt_publish_status(current_temp, 0.0, manual_stage, STATE_MANUAL, 0);
+            continue;
+        } else if (current_state == STATE_MANUAL) {
+            ESP_LOGI(TAG, "Exiting Manual Mode.");
+            power_control_set_stage(0);
+            last_stage = 0;
+            current_state = STATE_IDLE;
+        }
+
         if (!running) {
             if (current_state != STATE_IDLE) {
                 ESP_LOGI(TAG, "Mashing stopped. Turning off power.");

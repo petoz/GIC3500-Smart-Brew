@@ -32,9 +32,31 @@ static const char *MQTT_TOPIC_STATUS = "brew/cooker/status";
 static const char *TAG = "WIFI_MQTT";
 static float latest_temperature = -1.0f; // -1 means invalid/unknown
 static bool mqtt_connected = false;
+static bool mqtt_log_enabled = false;
 static esp_mqtt_client_handle_t mqtt_client;
 static int s_retry_num = 0;
 #define ESP_MAXIMUM_RETRY  5
+
+static vprintf_like_t default_logger;
+static int custom_logger(const char *fmt, va_list ap) {
+    char buf[256];
+    int len = vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    if (len > 0 && mqtt_log_enabled && mqtt_connected && mqtt_client) {
+        // Prevent recursive logging from wifi or mqtt tasks themselves
+        if (!strstr(buf, "mqtt_client") && !strstr(buf, "WIFI_MQTT") && !strstr(buf, "wifi")) {
+            esp_mqtt_client_publish(mqtt_client, "brew/cooker/log", buf, len, 0, 0);
+        }
+    }
+    return default_logger(fmt, ap);
+}
+
+void enable_mqtt_logging(bool enable) {
+    mqtt_log_enabled = enable;
+}
+
+bool get_mqtt_logging(void) {
+    return mqtt_log_enabled;
+}
 
 static void configure_antenna(void) {
     ESP_LOGI(TAG, "Configuring Xiao ESP32-C6 antenna");
@@ -183,11 +205,17 @@ static void load_nvs_config(void) {
     err = nvs_get_str(my_handle, "mqtt_pass", NULL, &required_size);
     if (err == ESP_OK) nvs_get_str(my_handle, "mqtt_pass", mqtt_pass, &required_size);
 
+    int32_t log_en = 0;
+    err = nvs_get_i32(my_handle, "mqtt_log", &log_en);
+    if (err == ESP_OK) mqtt_log_enabled = (log_en != 0);
+
     nvs_close(my_handle);
 }
 
 void wifi_mqtt_init(void) {
     configure_antenna();
+
+    default_logger = esp_log_set_vprintf(custom_logger);
 
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -248,4 +276,9 @@ void mqtt_publish_status(float current_temp, float target_temp, int stage, int p
              current_temp, target_temp, stage, phase, time_left_s);
 
     esp_mqtt_client_publish(mqtt_client, MQTT_TOPIC_STATUS, payload, 0, 1, 0);
+}
+
+void mqtt_publish_log(const char* message) {
+    if (!mqtt_connected || mqtt_client == NULL) return;
+    esp_mqtt_client_publish(mqtt_client, "brew/cooker/log", message, 0, 0, 0);
 }

@@ -23,6 +23,9 @@ mash_schedule_t* get_current_schedule(void);
 int get_current_status(void); // 0 = IDLE, 1 = RUNNING
 void set_current_status(int running);
 
+int get_manual_stage(void); // Returns -1 for AUTO mode, 0-11 for manual
+void set_manual_stage(int stage);
+
 #ifdef __cplusplus
 }
 #endif

@@ -2,12 +2,20 @@
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <sys/param.h>
+#include <cJSON.h>
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "esp_system.h"
+#include "esp_ota_ops.h"
+#include "esp_flash_partitions.h"
+#include "esp_partition.h"
 
 static const char *TAG = "WEB_SERVER";
 
 static httpd_handle_t server = NULL;
 static mash_schedule_t current_schedule;
 static int is_running = 0;
+static int current_manual_stage = -1; // -1 means AUTO mode
 
 // Simple HTML page to serve directly from C string
 static const char* index_html = 
@@ -33,28 +41,64 @@ static const char* index_html =
 "<div class='card'>"
 "<h3>Schedule (T, t)</h3>"
 "<form id='sched_form'>"
-"1: Temp <input type=\"number\" id=\"t1\" value=\"65\"> Time <input type=\"number\" id=\"m1\" value=\"60\"><br>"
-"2: Temp <input type=\"number\" id=\"t2\" value=\"75\"> Time <input type=\"number\" id=\"m2\" value=\"10\"><br>"
-"3: Temp <input type=\"number\" id=\"t3\" value=\"78\"> Time <input type=\"number\" id=\"m3\" value=\"5\"><br>"
+"<div id='steps_container'></div>"
+"<button type='button' onclick='addStep()'>+ Add Step</button> "
+"<button type='button' onclick='remStep()'>- Remove Step</button><br><br>"
 "<button type=\"button\" onclick='save()'>Save Schedule</button>"
 "</form>"
 "</div>"
 "<div class='card'>"
+"<h3>Manual Mode</h3>"
+"Stage (0-11): <input type='number' id='manual_stage' min='0' max='11' value='0'><br>"
+"<button onclick='setManual()'>Set Stage</button>"
+"<button class='stop' onclick='stopManual()'>Resume Auto</button>"
+"</div>"
+"<div class='card'>"
 "<h3>System Config</h3>"
-"<button type=\"button\" onclick='setupWifi()'>Update WiFi & MQTT</button>"
+"MQTT Logs: <span id='status_log'>--</span> "
+"<button onclick='toggleLog()'>Toggle Logs</button><br><br>"
+"<button type=\"button\" onclick='setupWifi()'>Update WiFi & MQTT</button><br><br>"
+"<h4>Firmware Update</h4>"
+"<input type='file' id='ota_file' accept='.bin'>"
+"<button onclick='uploadOta()'>Upload & Flash</button>"
 "</div>"
 "<script>"
 "function start() { fetch('/api/start', {method: 'POST'}); }"
 "function stop() { fetch('/api/stop', {method: 'POST'}); }"
+"let stepCount = 3;"
+"function renderSteps(data) {"
+"  let h = '';"
+"  for(let i=1; i<=stepCount; i++) {"
+"    let temp = (data && data[i-1]) ? data[i-1].temp : 65.0;"
+"    let time = (data && data[i-1]) ? data[i-1].time : 60;"
+"    h += i + ': Temp &deg;C <input type=\"number\" id=\"t'+i+'\" value=\"' + temp + '\" style=\"width:60px\"> ';"
+"    h += 'Time (m) <input type=\"number\" id=\"m'+i+'\" value=\"' + time + '\" style=\"width:60px\"><br>';"
+"  }"
+"  document.getElementById('steps_container').innerHTML = h;"
+"}"
+"fetch('/api/schedule').then(r=>r.json()).then(d=>{"
+"  if(d && d.steps && d.steps.length > 0) {"
+"    stepCount = d.steps.length;"
+"    renderSteps(d.steps);"
+"  } else { renderSteps(null); }"
+"}).catch(()=>renderSteps(null));"
+"function addStep() { if(stepCount<5) {stepCount++; renderSteps(null);} }"
+"function remStep() { if(stepCount>1) {stepCount--; renderSteps(null);} }"
 "function save() {"
 "  let s = {steps:[]};"
-"  for(let i=1; i<=3; i++) {"
+"  for(let i=1; i<=stepCount; i++) {"
 "    let t = document.getElementById('t'+i).value;"
 "    let m = document.getElementById('m'+i).value;"
 "    if (t > 10 && m > 0) s.steps.push({temp: parseFloat(t), hold_time_min: parseInt(m)});"
 "  }"
 "  fetch('/api/schedule', {method: 'POST', body: JSON.stringify(s)});"
 "}"
+"function setManual() {"
+"  let v = parseInt(document.getElementById('manual_stage').value);"
+"  if (v >= 0 && v <= 11) fetch('/api/manual', {method:'POST', body: JSON.stringify({stage: v})});"
+"}"
+"function stopManual() { fetch('/api/manual', {method:'POST', body: JSON.stringify({stage: -1})}); }"
+"function toggleLog() { fetch('/api/log', {method:'POST'}); }"
 "function setupWifi() {"
 "  let w = {"
 "    ssid: prompt('New WiFi SSID:'),"
@@ -65,10 +109,22 @@ static const char* index_html =
 "  };"
 "  if (w.ssid && w.mqtt) fetch('/api/config', {method: 'POST', body: JSON.stringify(w)}).then(()=>alert('Rebooting...'));"
 "}"
+"function uploadOta() {"
+"  let f = document.getElementById('ota_file').files[0];"
+"  if(!f) return alert('Select a .bin file');"
+"  fetch('/api/ota', {method: 'POST', body: f}).then(r=>{"
+"    if(r.ok) { alert('Success! Rebooting...'); setTimeout(()=>location.reload(), 5000); }"
+"    else alert('OTA Failed');"
+"  });"
+"}"
 "setInterval(() => {"
 "  fetch('/api/status').then(r=>r.json()).then(d=>{"
 "    document.getElementById('status_running').innerText = d.running ? 'Yes':'No';"
 "    document.getElementById('status_temp').innerText = d.running ? d.target_temp : '--';"
+"    document.getElementById('status_log').innerText = d.mqtt_log ? 'ON':'OFF';"
+"    if(d.manual_stage >= 0) { "
+"      document.getElementById('status_running').innerText = 'MANUAL (Stage ' + d.manual_stage + ')';"
+"    }"
 "  }).catch(e=>console.log(e));"
 "}, 2000);"
 "</script>"
@@ -92,9 +148,7 @@ static esp_err_t post_stop_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// VERY basic JSON paring to avoid cJSON dependency for now, or we can add cJSON in CMake
-// But esp-idf has cJSON built-in! So we can use it.
-#include <cJSON.h>
+// Built-in cJSON parsing is included at the top
 
 static esp_err_t post_schedule_handler(httpd_req_t *req) {
     int total_len = req->content_len;
@@ -140,6 +194,14 @@ static esp_err_t post_schedule_handler(httpd_req_t *req) {
         }
         cJSON_Delete(root);
         ESP_LOGI(TAG, "Parsed %d steps.", current_schedule.num_steps);
+        
+        nvs_handle_t my_handle;
+        if (nvs_open("gic3500_cfg", NVS_READWRITE, &my_handle) == ESP_OK) {
+            nvs_set_blob(my_handle, "schedule", &current_schedule, sizeof(mash_schedule_t));
+            nvs_commit(my_handle);
+            nvs_close(my_handle);
+            ESP_LOGI(TAG, "Saved schedule to NVS.");
+        }
     }
 
     free(buf);
@@ -147,20 +209,129 @@ static esp_err_t post_schedule_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+static esp_err_t get_schedule_handler(httpd_req_t *req) {
+    char buf[512];
+    int offset = snprintf(buf, sizeof(buf), "{\"steps\":[");
+    for (int i = 0; i < current_schedule.num_steps; i++) {
+        offset += snprintf(buf + offset, sizeof(buf) - offset, "{\"temp\":%.2f, \"time\":%d}%s", 
+            current_schedule.steps[i].temp, current_schedule.steps[i].hold_time_min,
+            i == current_schedule.num_steps - 1 ? "" : ",");
+    }
+    snprintf(buf + offset, sizeof(buf) - offset, "]}");
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+static esp_err_t post_manual_handler(httpd_req_t *req) {
+    int total_len = req->content_len;
+    if (total_len >= 1000) return ESP_FAIL;
+    char *buf = malloc(total_len + 1);
+    if(httpd_req_recv(req, buf, total_len) <= 0) { free(buf); return ESP_FAIL; }
+    buf[total_len] = '\0';
+    
+    cJSON *root = cJSON_Parse(buf);
+    if (root) {
+        cJSON *s = cJSON_GetObjectItem(root, "stage");
+        if (s) {
+            current_manual_stage = s->valueint;
+            ESP_LOGI(TAG, "Manual stage set to: %d", current_manual_stage);
+        }
+        cJSON_Delete(root);
+    }
+    
+    free(buf);
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+extern void enable_mqtt_logging(bool enable);
+extern bool get_mqtt_logging(void);
+
+static esp_err_t post_log_handler(httpd_req_t *req) {
+    bool current = get_mqtt_logging();
+    enable_mqtt_logging(!current);
+    
+    // Save to NVS
+    nvs_handle_t my_handle;
+    if (nvs_open("gic3500_cfg", NVS_READWRITE, &my_handle) == ESP_OK) {
+        nvs_set_i32(my_handle, "mqtt_log", !current ? 1 : 0);
+        nvs_commit(my_handle);
+        nvs_close(my_handle);
+    }
+    
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
 static esp_err_t get_status_handler(httpd_req_t *req) {
     char buf[128];
-    snprintf(buf, sizeof(buf), "{\"running\":%d, \"target_temp\":%.2f}", 
+    snprintf(buf, sizeof(buf), "{\"running\":%d, \"target_temp\":%.2f, \"manual_stage\":%d, \"mqtt_log\":%d}", 
              is_running, 
-             current_schedule.num_steps > 0 ? current_schedule.steps[0].temp : 0.0);
+             current_schedule.num_steps > 0 ? current_schedule.steps[0].temp : 0.0,
+             current_manual_stage,
+             get_mqtt_logging() ? 1 : 0);
              
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
-#include "nvs.h"
-#include "nvs_flash.h"
-#include "esp_system.h"
+static esp_err_t post_ota_handler(httpd_req_t *req) {
+    esp_ota_handle_t update_handle = 0;
+    const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
+    
+    if (update_partition == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA partition not found");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &update_handle);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_FAIL;
+    }
+
+    char *buf = malloc(2048);
+    int remaining = req->content_len;
+    
+    while (remaining > 0) {
+        int recv_len = httpd_req_recv(req, buf, MIN(remaining, 2048));
+        if (recv_len <= 0) {
+            if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            esp_ota_end(update_handle);
+            free(buf);
+            return ESP_FAIL;
+        }
+
+        err = esp_ota_write(update_handle, (const void *)buf, recv_len);
+        if (err != ESP_OK) {
+            esp_ota_end(update_handle);
+            free(buf);
+            return ESP_FAIL;
+        }
+        remaining -= recv_len;
+    }
+    
+    free(buf);
+    
+    if (esp_ota_end(update_handle) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA end failed");
+        return ESP_FAIL;
+    }
+    
+    err = esp_ota_set_boot_partition(update_partition);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA set boot failed");
+        return ESP_FAIL;
+    }
+    
+    httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    esp_restart();
+    return ESP_OK;
+}
 
 static esp_err_t post_config_handler(httpd_req_t *req) {
     int total_len = req->content_len;
@@ -207,14 +378,26 @@ static httpd_uri_t uri_index = { .uri = "/", .method = HTTP_GET, .handler = get_
 static httpd_uri_t uri_start = { .uri = "/api/start", .method = HTTP_POST, .handler = post_start_handler, .user_ctx = NULL };
 static httpd_uri_t uri_stop = { .uri = "/api/stop", .method = HTTP_POST, .handler = post_stop_handler, .user_ctx = NULL };
 static httpd_uri_t uri_schedule = { .uri = "/api/schedule", .method = HTTP_POST, .handler = post_schedule_handler, .user_ctx = NULL };
+static httpd_uri_t uri_schedule_get = { .uri = "/api/schedule", .method = HTTP_GET, .handler = get_schedule_handler, .user_ctx = NULL };
+static httpd_uri_t uri_manual = { .uri = "/api/manual", .method = HTTP_POST, .handler = post_manual_handler, .user_ctx = NULL };
+static httpd_uri_t uri_log = { .uri = "/api/log", .method = HTTP_POST, .handler = post_log_handler, .user_ctx = NULL };
 static httpd_uri_t uri_status = { .uri = "/api/status", .method = HTTP_GET, .handler = get_status_handler, .user_ctx = NULL };
 static httpd_uri_t uri_config = { .uri = "/api/config", .method = HTTP_POST, .handler = post_config_handler, .user_ctx = NULL };
+static httpd_uri_t uri_ota = { .uri = "/api/ota", .method = HTTP_POST, .handler = post_ota_handler, .user_ctx = NULL };
 
 void web_server_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 12;
 
     current_schedule.num_steps = 0;
+    nvs_handle_t my_handle;
+    if (nvs_open("gic3500_cfg", NVS_READONLY, &my_handle) == ESP_OK) {
+        size_t required_size = sizeof(mash_schedule_t);
+        if (nvs_get_blob(my_handle, "schedule", &current_schedule, &required_size) == ESP_OK) {
+            ESP_LOGI(TAG, "Loaded schedule from NVS: %d steps", current_schedule.num_steps);
+        }
+        nvs_close(my_handle);
+    }
 
     ESP_LOGI(TAG, "Starting web server on port: '%d'", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -222,8 +405,12 @@ void web_server_start(void) {
         httpd_register_uri_handler(server, &uri_start);
         httpd_register_uri_handler(server, &uri_stop);
         httpd_register_uri_handler(server, &uri_schedule);
+        httpd_register_uri_handler(server, &uri_schedule_get);
+        httpd_register_uri_handler(server, &uri_manual);
+        httpd_register_uri_handler(server, &uri_log);
         httpd_register_uri_handler(server, &uri_status);
         httpd_register_uri_handler(server, &uri_config);
+        httpd_register_uri_handler(server, &uri_ota);
     }
 }
 
@@ -237,4 +424,12 @@ int get_current_status(void) {
 
 void set_current_status(int running) {
     is_running = running;
+}
+
+int get_manual_stage(void) {
+    return current_manual_stage;
+}
+
+void set_manual_stage(int stage) {
+    current_manual_stage = stage;
 }
