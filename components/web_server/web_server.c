@@ -311,14 +311,18 @@ static esp_err_t post_log_handler(httpd_req_t *req) {
 extern float get_global_current_temp(void);
 extern uint8_t get_global_active_stage(void);
 extern int get_global_time_left_s(void);
+extern int get_global_step_index(void);
 
 static esp_err_t get_status_handler(httpd_req_t *req) {
     char buf[300];
+    int step = get_global_step_index();
+    float target = (current_schedule.num_steps > 0 && step < current_schedule.num_steps)
+                   ? current_schedule.steps[step].temp : 0.0f;
     snprintf(buf, sizeof(buf), 
              "{\"running\":%d, \"target_temp\":%.2f, \"current_temp\":%.2f, \"active_stage\":%d, \"time_left_s\":%d, \"manual_stage\":%d, \"mqtt_log\":%d," 
              "\"h_hold\":%d, \"o_hold\":%d, \"c_int\":%d, \"h_up\":%.2f, \"h_dn\":%.2f}", 
              is_running, 
-             current_schedule.num_steps > 0 ? current_schedule.steps[0].temp : 0.0,
+             target,
              get_global_current_temp(), get_global_active_stage(), get_global_time_left_s(),
              current_manual_stage,
              get_mqtt_logging() ? 1 : 0,

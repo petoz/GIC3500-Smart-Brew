@@ -22,6 +22,10 @@ float get_global_current_temp(void) { return global_current_temp; }
 uint8_t get_global_active_stage(void) { return global_active_stage; }
 int get_global_time_left_s(void) { return global_time_left_s; }
 
+// Current active mash step index (for correct target temp display)
+static int global_step_index = 0;
+int get_global_step_index(void) { return global_step_index; }
+
 // Mashing States
 typedef enum {
     STATE_IDLE,
@@ -204,6 +208,7 @@ void mashing_task(void *pvParameters) {
         global_current_temp = current_temp;
         global_active_stage = last_stage;
         global_time_left_s = time_left_s;
+        global_step_index = current_step_index;
     }
 }
 
