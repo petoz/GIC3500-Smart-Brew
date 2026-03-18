@@ -7,3 +7,4 @@ build/
 *.csv
 .DS_Store
 docs/.DS_Store
+managed_components/

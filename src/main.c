@@ -9,7 +9,7 @@
 #include "power_control.h"
 #include "wifi_mqtt.h"
 #include "web_server.h"
-#include "esp_netif.h"
+#include "mdns.h"
 
 static const char *TAG = "MAIN";
 
@@ -215,11 +215,15 @@ void mashing_task(void *pvParameters) {
 void app_main(void) {
     ESP_LOGI(TAG, "Starting Mashing Controller (ESP-IDF)");
 
-    // Set device hostname - visible as gic3500.local on most networks
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif) {
-        esp_netif_set_hostname(netif, "gic3500");
-        ESP_LOGI(TAG, "Hostname set to gic3500 (accessible as gic3500.local)");
+    // Start mDNS responder - accessible as http://gic3500.local/
+    esp_err_t mdns_err = mdns_init();
+    if (mdns_err == ESP_OK) {
+        mdns_hostname_set("gic3500");
+        mdns_instance_name_set("GIC3500 Smart Brew");
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+        ESP_LOGI(TAG, "mDNS started: http://gic3500.local/");
+    } else {
+        ESP_LOGE(TAG, "mDNS init failed: %d", mdns_err);
     }
 
     wifi_mqtt_init();
