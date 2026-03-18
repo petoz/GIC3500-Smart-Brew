@@ -26,6 +26,16 @@ void set_current_status(int running);
 int get_manual_stage(void); // Returns -1 for AUTO mode, 0-11 for manual
 void set_manual_stage(int stage);
 
+typedef struct {
+    int heating_min_hold_ms;
+    int holding_min_hold_ms;
+    int control_interval_ms;
+    float hysteresis_up;
+    float hysteresis_down;
+} control_config_t;
+
+control_config_t* get_control_config(void);
+
 #ifdef __cplusplus
 }
 #endif
