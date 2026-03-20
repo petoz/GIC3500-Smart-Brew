@@ -217,21 +217,26 @@ void mashing_task(void *pvParameters) {
   }
 }
 
-void app_main(void) {
-  ESP_LOGI(TAG, "Starting Mashing Controller (ESP-IDF)");
+void start_mdns(void) {
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "mDNS init failed: %d", err);
+        return;
+    }
 
-  // Start mDNS responder - accessible as http://gic3500.local/
-  esp_err_t mdns_err = mdns_init();
-  if (mdns_err == ESP_OK) {
     mdns_hostname_set("gic3500");
     mdns_instance_name_set("GIC3500 Smart Brew");
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+
     ESP_LOGI(TAG, "mDNS started: http://gic3500.local/");
-  } else {
-    ESP_LOGE(TAG, "mDNS init failed: %d", mdns_err);
-  }
+}
+
+
+void app_main(void) {
+  ESP_LOGI(TAG, "Starting Mashing Controller (ESP-IDF)");
 
   wifi_mqtt_init();
+  start_mdns();
   power_control_init();
   web_server_start();
 
