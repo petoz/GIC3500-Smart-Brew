@@ -71,7 +71,7 @@ static void configure_antenna(void) {
 
     gpio_set_level(WIFI_ENABLE, 0);       // Activate RF switch control
     vTaskDelay(pdMS_TO_TICKS(100));
-    gpio_set_level(WIFI_ANT_CONFIG, 0);   // Use external antenna (1 = external usually for Xiao C6) 0 = internal, 1 = external
+    gpio_set_level(WIFI_ANT_CONFIG, 0);   // Use external antenna 0 = internal, 1 = external
     ESP_LOGI(TAG, "Antenna configured: %s", gpio_get_level(WIFI_ANT_CONFIG) == 0 ? "Internal" : "External");
 }
 
