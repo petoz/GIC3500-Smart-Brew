@@ -133,16 +133,16 @@ void mashing_task(void *pvParameters) {
         hold_start_time = now_ms / 1000;
         target_stage = 3; // start hold gently
       } else if ((now_ms - last_stage_change_ms) >= cfg->heating_min_hold_ms) {
-        if (diff > 3.0f) {
+        if (diff > 2.5f) {
           target_stage = 11;
-        } else if (diff > 2.0f) {
-          target_stage = 6;
+        } else if (diff > 1.5f) {
+          target_stage = 9;
         } else if (diff > 1.0f) {
-          target_stage = 3;
+          target_stage = 6;
         } else if (diff > 0.5f) {
-          target_stage = (slope > 0.1f) ? 3 : 4;
+          target_stage = (slope > 0.25f) ? 4 : 5;
         } else {
-          target_stage = (slope > 0.05f) ? 0 : 1; // Soft approach
+          target_stage = (slope > 0.13f) ? 3 : 4; // Soft approach
         }
       }
     } break;
